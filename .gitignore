@@ -1,0 +1,5 @@
+*.zip
+.env
+.env.*
+!.env.example
+effective-pom
