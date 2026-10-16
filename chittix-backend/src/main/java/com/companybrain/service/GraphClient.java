@@ -34,7 +34,8 @@ public class GraphClient {
     public List<Map<String, Object>> query(String cypher, Map<String, Object> params) {
         try {
             Graph graph = driver.graph(graphName);
-            ResultSet resultSet = graph.readOnlyQuery(cypher, params);
+            Map<String, Object> safeParams = params == null ? Collections.emptyMap() : params;
+            ResultSet resultSet = graph.readOnlyQuery(cypher, safeParams);
             List<Map<String, Object>> rows = new ArrayList<>();
             for (Record record : resultSet) {
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -47,6 +48,30 @@ public class GraphClient {
         } catch (RuntimeException e) {
             throw new GraphUnavailableException(
                     "FalkorDB query on graph '" + graphName + "' failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Runs a write Cypher query using driver.graph(graphName).query(...) and returns
+     * each row as column-name -> value (or an empty list if no RETURN clause is present).
+     */
+    public List<Map<String, Object>> executeWrite(String cypher, Map<String, Object> params) {
+        try {
+            Graph graph = driver.graph(graphName);
+            Map<String, Object> safeParams = params == null ? Collections.emptyMap() : params;
+            ResultSet resultSet = graph.query(cypher, safeParams);
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (Record record : resultSet) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                for (String key : record.keys()) {
+                    row.put(key, record.getValue(key));
+                }
+                rows.add(row);
+            }
+            return rows;
+        } catch (RuntimeException e) {
+            throw new GraphUnavailableException(
+                    "FalkorDB write query on graph '" + graphName + "' failed: " + e.getMessage(), e);
         }
     }
 

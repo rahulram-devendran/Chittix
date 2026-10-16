@@ -36,6 +36,24 @@ export interface AskResponse {
   evidence: Evidence[];
 }
 
+export interface ProviderInfo {
+  provider: string;
+  implemented: boolean;
+  configured: boolean;
+  supportedCapabilities: string[];
+}
+
+export interface ProviderStatusResponse {
+  selectedProvider: string;
+  configuredModel: string;
+  enabled: boolean;
+  implemented: boolean;
+  configured: boolean;
+  baseUrl: string;
+  supportedCapabilities: string[];
+  availableProviders: ProviderInfo[];
+}
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 export async function checkHealth(): Promise<HealthResponse> {
@@ -72,6 +90,14 @@ export async function askQuestion(question: string): Promise<AskResponse> {
   if (!res.ok) {
     const errorText = await res.text().catch(() => '');
     throw new Error(`Question request failed: HTTP ${res.status} ${errorText}`);
+  }
+  return res.json();
+}
+
+export async function getProviderStatus(): Promise<ProviderStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/brain/provider-status`);
+  if (!res.ok) {
+    throw new Error(`Provider status failed with HTTP ${res.status}`);
   }
   return res.json();
 }
