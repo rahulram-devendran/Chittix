@@ -7,12 +7,17 @@ import com.companybrain.dto.Evidence;
 import com.companybrain.dto.EvidencePackage;
 import com.companybrain.dto.EvidenceStatus;
 import com.companybrain.dto.GeneratedAnswer;
+import com.companybrain.dto.ProviderConfigRequest;
 import com.companybrain.dto.ProviderStatusResponse;
+import com.companybrain.dto.ProviderTestResult;
 import com.companybrain.provider.ModelProvider;
 import com.companybrain.provider.ModelProviderAdapter;
 import com.companybrain.provider.ModelProviderRegistry;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -91,7 +96,11 @@ public class BrainService {
                     generated.answerText(),
                     generated.graphFacts(),
                     evidence.decisionContexts(),
-                    generated.distinctSources()
+                    generated.distinctSources(),
+                    generated.modelUsed(),
+                    generated.providerUsed(),
+                    generated.fallbackUsed(),
+                    generated.fallbackReason()
             );
         }
 
@@ -155,6 +164,9 @@ public class BrainService {
                             p.getId(),
                             a.isImplemented(),
                             a.isConfigured(llmProperties),
+                            llmProperties.resolveModel(p),
+                            llmProperties.resolveBaseUrl(p),
+                            llmProperties.hasApiKeyConfigured(p),
                             caps
                     );
                 })
@@ -170,5 +182,81 @@ public class BrainService {
                 capabilities,
                 available
         );
+    }
+
+    /**
+     * Tests a candidate AI provider configuration without altering the running system.
+     * Restricts configuration testing to local single-admin demo requests.
+     */
+    public ProviderTestResult testProvider(ProviderConfigRequest request, HttpServletRequest httpRequest) {
+        verifyLocalAdminAccess(httpRequest);
+        if (llmProperties == null || modelProviderRegistry == null) {
+            return new ProviderTestResult(false, request.provider(), request.model(), "LLM service registry not available", 0L);
+        }
+
+        ModelProvider provider;
+        try {
+            provider = ModelProvider.fromString(request.provider());
+        } catch (IllegalArgumentException e) {
+            return new ProviderTestResult(false, request.provider(), request.model(), "Unknown or unsupported provider: " + request.provider(), 0L);
+        }
+
+        Optional<ModelProviderAdapter> adapterOpt = modelProviderRegistry.findAdapter(provider);
+        if (adapterOpt.isEmpty() || !adapterOpt.get().isImplemented()) {
+            return new ProviderTestResult(false, provider.getId(), request.model(), "Provider '" + provider.getId() + "' has no implemented adapter.", 0L);
+        }
+
+        LlmProperties candidate = llmProperties.createCandidate(
+                provider.getId(),
+                request.model(),
+                request.baseUrl(),
+                request.apiKey()
+        );
+
+        return adapterOpt.get().testConnection(candidate);
+    }
+
+    /**
+     * Tests and activates a candidate AI provider configuration in memory.
+     * Guarantees that a failed test will never replace the last working configuration.
+     */
+    public ProviderStatusResponse configureProvider(ProviderConfigRequest request, HttpServletRequest httpRequest) {
+        verifyLocalAdminAccess(httpRequest);
+
+        ProviderTestResult testResult = testProvider(request, httpRequest);
+        if (!testResult.success()) {
+            throw new IllegalArgumentException("Connection test failed: " + testResult.message());
+        }
+
+        llmProperties.applyCandidate(
+                request.provider(),
+                request.model(),
+                request.baseUrl(),
+                request.apiKey()
+        );
+
+        return getProviderStatus();
+    }
+
+    /**
+     * Restricts sensitive configuration testing and changes to local single-admin loopback traffic.
+     * Documented limitation: This is for local hackathon demo purposes and not production multi-user security.
+     */
+    private void verifyLocalAdminAccess(HttpServletRequest request) {
+        if (request == null) {
+            return;
+        }
+        String remoteAddr = request.getRemoteAddr();
+        boolean isLocal = "127.0.0.1".equals(remoteAddr)
+                || "0:0:0:0:0:0:0:1".equals(remoteAddr)
+                || "::1".equals(remoteAddr)
+                || "localhost".equalsIgnoreCase(remoteAddr);
+
+        if (!isLocal) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Admin configuration operations are restricted to local loopback (single-admin hackathon demo mode)."
+            );
+        }
     }
 }

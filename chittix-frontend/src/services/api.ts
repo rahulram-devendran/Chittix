@@ -21,6 +21,29 @@ export interface PaymentsContextResponse {
   contexts: DecisionContext[];
 }
 
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: string;
+  sourceId?: string;
+  properties?: Record<string, string>;
+}
+
+export interface GraphRelationship {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+}
+
+export interface GraphDataResponse {
+  graph: string;
+  nodeCount: number;
+  relationshipCount: number;
+  nodes: GraphNode[];
+  relationships: GraphRelationship[];
+}
+
 export interface Evidence {
   documentTitle: string;
   sourceId: string;
@@ -34,12 +57,19 @@ export interface AskResponse {
   facts: string[];
   decisions: DecisionContext[];
   evidence: Evidence[];
+  modelUsed?: string;
+  providerUsed?: string;
+  fallbackUsed?: boolean;
+  fallbackReason?: string;
 }
 
 export interface ProviderInfo {
   provider: string;
   implemented: boolean;
   configured: boolean;
+  model?: string;
+  baseUrl?: string;
+  apiKeyConfigured?: boolean;
   supportedCapabilities: string[];
 }
 
@@ -79,6 +109,15 @@ export async function getPaymentsContext(): Promise<PaymentsContextResponse> {
   return res.json();
 }
 
+export async function getKnowledgeGraph(): Promise<GraphDataResponse> {
+  const res = await fetch(`${BASE_URL}/api/brain/graph`);
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => '');
+    throw new Error(`Failed to fetch knowledge graph: HTTP ${res.status} ${errorText}`);
+  }
+  return res.json();
+}
+
 export async function askQuestion(question: string): Promise<AskResponse> {
   const res = await fetch(`${BASE_URL}/api/brain/ask`, {
     method: 'POST',
@@ -101,3 +140,230 @@ export async function getProviderStatus(): Promise<ProviderStatusResponse> {
   }
   return res.json();
 }
+
+export async function getGitHubStatus(): Promise<import('../types/github').GitHubStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/github/status`);
+  if (!res.ok) {
+    throw new Error(`GitHub status check failed: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function configureGitHub(token: string): Promise<import('../types/github').GitHubStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/github/configure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    const message = errorJson?.message || `Configuration failed with HTTP ${res.status}`;
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+export async function getGitHubRepos(): Promise<import('../types/github').GitHubRepo[]> {
+  const res = await fetch(`${BASE_URL}/api/github/repos`);
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    const message = errorJson?.message || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+export async function startGitHubImport(repositories: string[]): Promise<{ jobId: string; status: string }> {
+  const res = await fetch(`${BASE_URL}/api/github/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repositories }),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    const message = errorJson?.message || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+export async function getGitHubJobStatus(jobId: string): Promise<import('../types/github').GitHubJobStatus> {
+  const res = await fetch(`${BASE_URL}/api/github/jobs/${encodeURIComponent(jobId)}`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch job ${jobId}: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function listGitHubJobs(): Promise<import('../types/github').GitHubJobStatus[]> {
+  const res = await fetch(`${BASE_URL}/api/github/jobs`);
+  if (!res.ok) {
+    throw new Error(`Failed to list import jobs: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface ProviderConfigRequest {
+  provider: string;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+export interface ProviderTestResult {
+  success: boolean;
+  provider: string;
+  model?: string;
+  message: string;
+  latencyMs?: number;
+}
+
+export async function testProviderConnection(config: ProviderConfigRequest): Promise<ProviderTestResult> {
+  const res = await fetch(`${BASE_URL}/api/brain/test-provider`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    throw new Error(errorJson?.message || `Test failed: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function configureProvider(config: ProviderConfigRequest): Promise<ProviderStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/brain/configure-provider`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    throw new Error(errorJson?.message || `Configuration failed: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface SourceStatusResponse {
+  provider: string;
+  configured: boolean;
+  connected: boolean;
+  username?: string;
+  displayName?: string;
+  baseUrl?: string;
+  message: string;
+  ingestionSupported: boolean;
+  ingestionNotice: string;
+}
+
+export interface SourceConfigRequest {
+  provider: string;
+  token: string;
+  username?: string;
+  baseUrl?: string;
+}
+
+export async function getAllSourceStatuses(): Promise<Record<string, SourceStatusResponse>> {
+  const res = await fetch(`${BASE_URL}/api/sources/status`);
+  if (!res.ok) {
+    throw new Error(`Failed to load source statuses: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function configureSource(config: SourceConfigRequest): Promise<SourceStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/sources/configure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    throw new Error(errorJson?.message || `Source configuration failed with HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function testSourceConnection(config: SourceConfigRequest): Promise<SourceStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/sources/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    throw new Error(errorJson?.message || `Connection test failed with HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface SourceItemDto {
+  id: string;
+  name: string;
+  fullName: string;
+  description: string;
+  webUrl: string;
+  defaultBranch?: string;
+  type: string;
+  isPrivate: boolean;
+  metadata?: Record<string, string>;
+}
+
+export interface SourceJobStatusResponse {
+  jobId: string;
+  provider: string;
+  status: string; // QUEUED, RUNNING, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED
+  itemsTotal: number;
+  itemsProcessed: number;
+  commitsImported: number;
+  pullRequestsImported: number;
+  chunksCreated: number;
+  currentItem?: string;
+  currentPhase: string;
+  startTimeMillis: number;
+  endTimeMillis?: number;
+  logs: string[];
+  errors: string[];
+  importedItems: string[];
+}
+
+export async function getSourceItems(provider: string): Promise<SourceItemDto[]> {
+  const res = await fetch(`${BASE_URL}/api/sources/${provider}/items`);
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    throw new Error(errorJson?.message || `Failed to list items for ${provider}: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function startSourceImport(provider: string, items: string[]): Promise<{ jobId: string; status: string }> {
+  const res = await fetch(`${BASE_URL}/api/sources/${provider}/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, items }),
+  });
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => null);
+    throw new Error(errorJson?.message || `Failed to start import for ${provider}: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getSourceJobStatus(jobId: string): Promise<SourceJobStatusResponse> {
+  const res = await fetch(`${BASE_URL}/api/sources/jobs/${jobId}`);
+  if (!res.ok) {
+    throw new Error(`Failed to get job status: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function listSourceJobs(provider: string): Promise<SourceJobStatusResponse[]> {
+  const res = await fetch(`${BASE_URL}/api/sources/${provider}/jobs`);
+  if (!res.ok) {
+    throw new Error(`Failed to list jobs for ${provider}: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+
+

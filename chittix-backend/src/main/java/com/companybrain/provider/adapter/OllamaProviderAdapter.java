@@ -15,6 +15,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -74,27 +75,44 @@ public class OllamaProviderAdapter implements ModelProviderAdapter {
                     "model", modelName,
                     "messages", List.of(
                             Map.of("role", "system", "content", systemPrompt),
-                            Map.of("role", "user", "content", userPrompt)
-                    ),
+                            Map.of("role", "user", "content", userPrompt)),
                     "stream", false,
                     "options", Map.of(
                             "temperature", properties.getTemperature(),
-                            "num_predict", properties.getMaxTokens()
-                    )
-            );
+                            "num_predict", properties.getMaxTokens()));
 
             RestClient client = customRestClient != null ? customRestClient : buildDefaultRestClient(properties);
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = client.post()
+            String responseBody = client.post()
                     .uri(targetUrl)
+                    .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .accept(org.springframework.http.MediaType.APPLICATION_JSON)
                     .body(requestBody)
-                    .retrieve()
-                    .body(Map.class);
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            throw new IllegalStateException(
+                                    "Ollama returned HTTP " + response.getStatusCode());
+                        }
+
+                        return org.springframework.util.StreamUtils.copyToString(
+                                response.getBody(),
+                                StandardCharsets.UTF_8);
+                    });
+
+            if (responseBody == null || responseBody.isBlank()) {
+                log.warn("Ollama returned an empty HTTP response body.");
+                return EvidencePromptHelper.buildDeterministicFallback(
+                        evidence, status, "Ollama returned empty response");
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> response = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(responseBody, Map.class);
 
             if (response == null) {
                 log.warn("Ollama returned null HTTP response payload.");
-                return EvidencePromptHelper.buildDeterministicFallback(evidence, status, "Ollama returned empty response");
+                return EvidencePromptHelper.buildDeterministicFallback(evidence, status,
+                        "Ollama returned empty response");
             }
 
             @SuppressWarnings("unchecked")
@@ -103,10 +121,12 @@ public class OllamaProviderAdapter implements ModelProviderAdapter {
 
             if (rawContent == null || rawContent.isBlank()) {
                 log.warn("Ollama produced blank answer text.");
-                return EvidencePromptHelper.buildDeterministicFallback(evidence, status, "Ollama returned blank content");
+                return EvidencePromptHelper.buildDeterministicFallback(evidence, status,
+                        "Ollama returned blank content");
             }
 
-            List<RetrievedPassage> validatedCitations = EvidencePromptHelper.extractAndValidateCitations(rawContent, evidence);
+            List<RetrievedPassage> validatedCitations = EvidencePromptHelper.extractAndValidateCitations(rawContent,
+                    evidence);
             log.info("Successfully generated grounded answer using Ollama ({})", properties.getModel());
 
             return new GeneratedAnswer(
@@ -119,13 +139,58 @@ public class OllamaProviderAdapter implements ModelProviderAdapter {
                     status,
                     evidence.limitations(),
                     false,
-                    null
-            );
+                    null,
+                    modelName,
+                    getProvider().getId());
 
         } catch (Exception e) {
             log.warn("Ollama provider call failed ({}). Activating deterministic fallback.", e.getMessage());
-            return EvidencePromptHelper.buildDeterministicFallback(evidence, status, "Ollama runtime error: " + e.getMessage());
+            return EvidencePromptHelper.buildDeterministicFallback(evidence, status,
+                    "Ollama runtime error: " + e.getMessage());
         }
+    }
+
+    @Override
+    public com.companybrain.dto.ProviderTestResult testConnection(LlmProperties properties) {
+        long start = System.currentTimeMillis();
+        String baseUrl = properties.resolveBaseUrl(ModelProvider.OLLAMA);
+        String modelName = properties.resolveModel(ModelProvider.OLLAMA);
+        String tagsUrl = baseUrl.replaceAll("/+$", "") + "/api/tags";
+
+        try {
+            RestClient client = customRestClient != null ? customRestClient : buildShortTimeoutRestClient();
+
+            String responseBody = client.get()
+                    .uri(tagsUrl)
+                    .accept(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .body(String.class);
+
+            long latency = System.currentTimeMillis() - start;
+
+            if (responseBody != null && responseBody.contains("\"" + modelName + "\"")) {
+                return new com.companybrain.dto.ProviderTestResult(true, getProvider().getId(), modelName,
+                        "Successfully connected to Ollama at " + baseUrl + ". Model '" + modelName + "' is ready.", latency);
+            } else if (responseBody != null && responseBody.contains("models")) {
+                return new com.companybrain.dto.ProviderTestResult(true, getProvider().getId(), modelName,
+                        "Connected to Ollama at " + baseUrl + ", but model '" + modelName + "' is not yet downloaded.", latency);
+            } else {
+                return new com.companybrain.dto.ProviderTestResult(true, getProvider().getId(), modelName,
+                        "Successfully reached Ollama runtime at " + baseUrl + ".", latency);
+            }
+        } catch (Exception e) {
+            long latency = System.currentTimeMillis() - start;
+            String safeMsg = e.getMessage() != null ? e.getMessage() : "Connection refused";
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Failed to connect to Ollama at " + baseUrl + ": " + safeMsg, latency);
+        }
+    }
+
+    private static RestClient buildShortTimeoutRestClient() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(4000));
+        factory.setReadTimeout(Duration.ofMillis(5000));
+        return RestClient.builder().requestFactory(factory).build();
     }
 
     private static RestClient buildDefaultRestClient(LlmProperties properties) {

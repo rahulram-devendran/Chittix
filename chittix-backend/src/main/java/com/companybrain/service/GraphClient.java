@@ -75,12 +75,21 @@ public class GraphClient {
         }
     }
 
-    /** Real connectivity check: runs a query against the configured graph. */
+    /**
+     * Read-only connectivity check. An empty graph key still means FalkorDB is reachable.
+     * Never issues write queries, so ping cannot create or mutate the graph.
+     */
     public boolean ping() {
+        if (driver == null) {
+            return false;
+        }
         try {
-            query("MATCH (n) RETURN count(n) AS nodes", Collections.emptyMap());
+            query("RETURN 1 AS ping", Collections.emptyMap());
             return true;
         } catch (GraphUnavailableException e) {
+            String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+            return msg.contains("empty key") || msg.contains("graph key not found");
+        } catch (Throwable t) {
             return false;
         }
     }

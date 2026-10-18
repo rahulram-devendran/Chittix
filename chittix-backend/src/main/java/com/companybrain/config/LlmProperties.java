@@ -68,6 +68,10 @@ public class LlmProperties {
     private String anthropicBaseUrl = "https://api.anthropic.com";
     private String anthropicModel = "claude-3-5-haiku-20241022";
 
+    private String openaiCompatibleApiKey = "";
+    private String openaiCompatibleBaseUrl = "http://localhost:8000/v1";
+    private String openaiCompatibleModel = "gpt-4o-mini";
+
     public LlmProperties() {
     }
 
@@ -86,41 +90,36 @@ public class LlmProperties {
     }
 
     /**
-     * Resolves the appropriate model name for the target provider.
-     * Uses provider-specific defaults if the generic model wasn't explicitly changed from the Ollama default.
+     * Resolves the appropriate model name for the target provider without leaking
+     * another provider's active model identifier.
      */
     public String resolveModel(ModelProvider targetProvider) {
         if (targetProvider == null) {
-            return model;
-        }
-
-        // If the model was customized from default "qwen2.5:1.5b", prioritize it
-        if (model != null && !model.isBlank() && !model.equals("qwen2.5:1.5b")) {
-            return model;
+            return firstNonBlank(model, "qwen2.5:1.5b");
         }
 
         return switch (targetProvider) {
-            case OPENAI -> (openaiModel != null && !openaiModel.isBlank()) ? openaiModel : "gpt-4o-mini";
-            case GEMINI -> (geminiModel != null && !geminiModel.isBlank()) ? geminiModel : "gemini-1.5-flash";
-            case ANTHROPIC -> (anthropicModel != null && !anthropicModel.isBlank()) ? anthropicModel : "claude-3-5-haiku-20241022";
-            case OPENAI_COMPATIBLE -> (openaiModel != null && !openaiModel.isBlank()) ? openaiModel : model;
-            case OLLAMA -> model;
+            case OLLAMA -> firstNonBlank(model, "qwen2.5:1.5b");
+            case OPENAI -> firstNonBlank(openaiModel, "gpt-4o-mini");
+            case OPENAI_COMPATIBLE -> resolveOpenAiCompatibleModel();
+            case GEMINI -> firstNonBlank(geminiModel, "gemini-1.5-flash");
+            case ANTHROPIC -> firstNonBlank(anthropicModel, "claude-3-5-haiku-20241022");
         };
     }
 
     /**
      * Resolves the appropriate API key for the given provider.
-     * Never commits or hardcodes secrets.
+     * Never commits or hardcodes secrets. Ollama never requires a key.
      */
     public String resolveApiKey(ModelProvider targetProvider) {
         if (targetProvider == null) {
             return apiKey != null ? apiKey : "";
         }
         return switch (targetProvider) {
-            case OPENAI -> (openaiApiKey != null && !openaiApiKey.isBlank()) ? openaiApiKey : apiKey;
-            case OPENAI_COMPATIBLE -> (openaiApiKey != null && !openaiApiKey.isBlank()) ? openaiApiKey : apiKey;
-            case GEMINI -> (geminiApiKey != null && !geminiApiKey.isBlank()) ? geminiApiKey : apiKey;
-            case ANTHROPIC -> (anthropicApiKey != null && !anthropicApiKey.isBlank()) ? anthropicApiKey : apiKey;
+            case OPENAI -> firstNonBlank(openaiApiKey, apiKey);
+            case OPENAI_COMPATIBLE -> resolveOpenAiCompatibleApiKey();
+            case GEMINI -> firstNonBlank(geminiApiKey, apiKey);
+            case ANTHROPIC -> firstNonBlank(anthropicApiKey, apiKey);
             case OLLAMA -> "";
         };
     }
@@ -133,11 +132,11 @@ public class LlmProperties {
             return baseUrl != null ? baseUrl : "";
         }
         return switch (targetProvider) {
-            case OLLAMA -> (baseUrl != null && !baseUrl.isBlank()) ? baseUrl : "http://localhost:11434";
-            case OPENAI -> (openaiBaseUrl != null && !openaiBaseUrl.isBlank()) ? openaiBaseUrl : "https://api.openai.com/v1";
-            case OPENAI_COMPATIBLE -> (baseUrl != null && !baseUrl.isBlank()) ? baseUrl : "http://localhost:8000/v1";
-            case GEMINI -> (geminiBaseUrl != null && !geminiBaseUrl.isBlank()) ? geminiBaseUrl : "https://generativelanguage.googleapis.com";
-            case ANTHROPIC -> (anthropicBaseUrl != null && !anthropicBaseUrl.isBlank()) ? anthropicBaseUrl : "https://api.anthropic.com";
+            case OLLAMA -> firstNonBlank(baseUrl, "http://localhost:11434");
+            case OPENAI -> firstNonBlank(openaiBaseUrl, "https://api.openai.com/v1");
+            case OPENAI_COMPATIBLE -> resolveOpenAiCompatibleBaseUrl();
+            case GEMINI -> firstNonBlank(geminiBaseUrl, "https://generativelanguage.googleapis.com");
+            case ANTHROPIC -> firstNonBlank(anthropicBaseUrl, "https://api.anthropic.com");
         };
     }
 
@@ -275,5 +274,186 @@ public class LlmProperties {
 
     public void setAnthropicModel(String anthropicModel) {
         this.anthropicModel = anthropicModel;
+    }
+
+    public String getOpenaiCompatibleApiKey() {
+        return openaiCompatibleApiKey;
+    }
+
+    public void setOpenaiCompatibleApiKey(String openaiCompatibleApiKey) {
+        this.openaiCompatibleApiKey = openaiCompatibleApiKey;
+    }
+
+    public String getOpenaiCompatibleBaseUrl() {
+        return openaiCompatibleBaseUrl;
+    }
+
+    public void setOpenaiCompatibleBaseUrl(String openaiCompatibleBaseUrl) {
+        this.openaiCompatibleBaseUrl = openaiCompatibleBaseUrl;
+    }
+
+    public String getOpenaiCompatibleModel() {
+        return openaiCompatibleModel;
+    }
+
+    public void setOpenaiCompatibleModel(String openaiCompatibleModel) {
+        this.openaiCompatibleModel = openaiCompatibleModel;
+    }
+
+    /**
+     * Creates an isolated candidate copy of these properties for connection testing.
+     * Prevents candidate modifications from mutating this singleton instance.
+     */
+    public LlmProperties createCandidate(String candidateProvider, String candidateModel, String candidateBaseUrl, String candidateApiKey) {
+        LlmProperties copy = new LlmProperties(
+                this.enabled,
+                this.provider,
+                this.model,
+                this.baseUrl,
+                this.timeoutSeconds,
+                this.temperature,
+                this.maxTokens
+        );
+        copy.setApiKey(this.apiKey);
+        copy.setOpenaiApiKey(this.openaiApiKey);
+        copy.setOpenaiBaseUrl(this.openaiBaseUrl);
+        copy.setOpenaiModel(this.openaiModel);
+        copy.setGeminiApiKey(this.geminiApiKey);
+        copy.setGeminiBaseUrl(this.geminiBaseUrl);
+        copy.setGeminiModel(this.geminiModel);
+        copy.setAnthropicApiKey(this.anthropicApiKey);
+        copy.setAnthropicBaseUrl(this.anthropicBaseUrl);
+        copy.setAnthropicModel(this.anthropicModel);
+        copy.setOpenaiCompatibleApiKey(this.openaiCompatibleApiKey);
+        copy.setOpenaiCompatibleBaseUrl(this.openaiCompatibleBaseUrl);
+        copy.setOpenaiCompatibleModel(this.openaiCompatibleModel);
+
+        copy.applyCandidate(candidateProvider, candidateModel, candidateBaseUrl, candidateApiKey);
+        return copy;
+    }
+
+    /**
+     * Safely applies the candidate configuration to this singleton in memory.
+     * Note: This is an in-memory runtime update for the local demo session and is not persisted to disk.
+     * Provider-specific model, endpoint, and key fields stay isolated so activating one provider
+     * does not overwrite another provider's stored values. Blank API keys keep the key already on file.
+     */
+    public synchronized void applyCandidate(String candidateProvider, String candidateModel, String candidateBaseUrl, String candidateApiKey) {
+        if (candidateProvider == null || candidateProvider.isBlank()) {
+            return;
+        }
+
+        ModelProvider targetProvider = ModelProvider.fromString(candidateProvider);
+        this.provider = targetProvider.getId();
+
+        switch (targetProvider) {
+            case OLLAMA -> {
+                if (hasText(candidateModel)) {
+                    this.model = candidateModel.trim();
+                }
+                if (hasText(candidateBaseUrl)) {
+                    this.baseUrl = candidateBaseUrl.trim();
+                }
+            }
+            case OPENAI -> {
+                if (hasText(candidateModel)) {
+                    this.openaiModel = candidateModel.trim();
+                }
+                if (hasText(candidateBaseUrl)) {
+                    this.openaiBaseUrl = candidateBaseUrl.trim();
+                }
+                if (hasText(candidateApiKey)) {
+                    this.openaiApiKey = candidateApiKey.trim();
+                }
+            }
+            case OPENAI_COMPATIBLE -> {
+                if (hasText(candidateModel)) {
+                    this.openaiCompatibleModel = candidateModel.trim();
+                }
+                if (hasText(candidateBaseUrl)) {
+                    this.openaiCompatibleBaseUrl = candidateBaseUrl.trim();
+                }
+                if (hasText(candidateApiKey)) {
+                    this.openaiCompatibleApiKey = candidateApiKey.trim();
+                }
+            }
+            case GEMINI -> {
+                if (hasText(candidateModel)) {
+                    this.geminiModel = candidateModel.trim();
+                }
+                if (hasText(candidateBaseUrl)) {
+                    this.geminiBaseUrl = candidateBaseUrl.trim();
+                }
+                if (hasText(candidateApiKey)) {
+                    this.geminiApiKey = candidateApiKey.trim();
+                }
+            }
+            case ANTHROPIC -> {
+                if (hasText(candidateModel)) {
+                    this.anthropicModel = candidateModel.trim();
+                }
+                if (hasText(candidateBaseUrl)) {
+                    this.anthropicBaseUrl = candidateBaseUrl.trim();
+                }
+                if (hasText(candidateApiKey)) {
+                    this.anthropicApiKey = candidateApiKey.trim();
+                }
+            }
+        }
+    }
+
+    public boolean hasApiKeyConfigured(ModelProvider targetProvider) {
+        String resolved = resolveApiKey(targetProvider);
+        return resolved != null && !resolved.isBlank();
+    }
+
+    private String resolveOpenAiCompatibleModel() {
+        if (hasText(openaiCompatibleModel) && !"gpt-4o-mini".equals(openaiCompatibleModel)) {
+            return openaiCompatibleModel;
+        }
+        if ("openai-compatible".equals(provider) && hasText(model) && !"qwen2.5:1.5b".equals(model)) {
+            return model;
+        }
+        return firstNonBlank(openaiCompatibleModel, "gpt-4o-mini");
+    }
+
+    private String resolveOpenAiCompatibleBaseUrl() {
+        if (hasText(openaiCompatibleBaseUrl) && !"http://localhost:8000/v1".equals(trimTrailingSlash(openaiCompatibleBaseUrl))) {
+            return openaiCompatibleBaseUrl;
+        }
+        if ("openai-compatible".equals(provider) && hasText(baseUrl) && !"http://localhost:11434".equals(trimTrailingSlash(baseUrl))) {
+            return baseUrl;
+        }
+        return firstNonBlank(openaiCompatibleBaseUrl, "http://localhost:8000/v1");
+    }
+
+    private String resolveOpenAiCompatibleApiKey() {
+        if (hasText(openaiCompatibleApiKey)) {
+            return openaiCompatibleApiKey;
+        }
+        if ("openai-compatible".equals(provider) && hasText(apiKey)) {
+            return apiKey;
+        }
+        return "";
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (hasText(value)) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String trimTrailingSlash(String value) {
+        return value == null ? "" : value.replaceAll("/+$", "");
     }
 }

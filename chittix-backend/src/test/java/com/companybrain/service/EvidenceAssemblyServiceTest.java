@@ -3,6 +3,7 @@ package com.companybrain.service;
 import com.companybrain.dto.DecisionContext;
 import com.companybrain.dto.Evidence;
 import com.companybrain.dto.EvidencePackage;
+import com.companybrain.dto.RetrievalScope;
 import com.companybrain.dto.RetrievedChunk;
 import com.companybrain.dto.RetrievedPassage;
 import com.companybrain.exception.GraphUnavailableException;
@@ -15,13 +16,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -80,7 +84,7 @@ class EvidenceAssemblyServiceTest {
                 0.88,
                 Map.of("distance", 0.12)
         );
-        when(vectorRetrievalService.retrieve(question, 5)).thenReturn(List.of(chunk));
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class))).thenReturn(List.of(chunk));
 
         EvidencePackage pkg = service.assembleEvidence(question, 5);
 
@@ -121,7 +125,7 @@ class EvidenceAssemblyServiceTest {
                 List.of("(Project: Payment Service)-[USES]->(System: PostgreSQL)")
         );
         when(contextQueryService.findForQuestion(question)).thenReturn(List.of(ctx));
-        when(vectorRetrievalService.retrieve(question, 5)).thenReturn(Collections.emptyList());
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class))).thenReturn(Collections.emptyList());
 
         EvidencePackage pkg = service.assembleEvidence(question);
 
@@ -140,6 +144,7 @@ class EvidenceAssemblyServiceTest {
         String question = "What are the rules for database connection pooling?";
 
         when(contextQueryService.findForQuestion(question)).thenReturn(Collections.emptyList());
+        when(contextQueryService.determineScope(question)).thenReturn(RetrievalScope.architecture(Set.of("DOC-001")));
 
         RetrievedChunk chunk = new RetrievedChunk(
                 "DOC-001#chunk-1",
@@ -151,7 +156,7 @@ class EvidenceAssemblyServiceTest {
                 0.75,
                 Map.of()
         );
-        when(vectorRetrievalService.retrieve(question, 5)).thenReturn(List.of(chunk));
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class))).thenReturn(List.of(chunk));
 
         EvidencePackage pkg = service.assembleEvidence(question);
 
@@ -170,7 +175,7 @@ class EvidenceAssemblyServiceTest {
         String question = "What is our company holiday policy?";
 
         when(contextQueryService.findForQuestion(question)).thenReturn(Collections.emptyList());
-        when(vectorRetrievalService.retrieve(question, 5)).thenReturn(Collections.emptyList());
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class))).thenReturn(Collections.emptyList());
 
         EvidencePackage pkg = service.assembleEvidence(question);
 
@@ -187,6 +192,7 @@ class EvidenceAssemblyServiceTest {
     void preservesStrictProvenanceWithoutFabricatingRationale() {
         String question = "Tell me about payments";
         when(contextQueryService.findForQuestion(question)).thenReturn(Collections.emptyList());
+        when(contextQueryService.determineScope(question)).thenReturn(RetrievalScope.architecture(Set.of("DOC-001")));
 
         RetrievedChunk chunk = new RetrievedChunk(
                 "DOC-001#chunk-0",
@@ -198,7 +204,7 @@ class EvidenceAssemblyServiceTest {
                 0.90,
                 Map.of()
         );
-        when(vectorRetrievalService.retrieve(question, 5)).thenReturn(List.of(chunk));
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class))).thenReturn(List.of(chunk));
 
         EvidencePackage pkg = service.assembleEvidence(question);
 
@@ -221,7 +227,7 @@ class EvidenceAssemblyServiceTest {
         RetrievedChunk chunkWithMissingMetadata = new RetrievedChunk(
                 "CHUNK-X", 0, "Some text", null, null, 0.4, 0.6, null
         );
-        when(vectorRetrievalService.retrieve(question, 5)).thenReturn(List.of(chunkWithMissingMetadata));
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class))).thenReturn(List.of(chunkWithMissingMetadata));
 
         EvidencePackage pkg = service.assembleEvidence(question);
 
@@ -245,9 +251,74 @@ class EvidenceAssemblyServiceTest {
     void propagatesGraphUnavailableExceptionWhenRetrievalServiceFails() {
         String question = "Why PostgreSQL?";
         when(contextQueryService.findForQuestion(question)).thenReturn(Collections.emptyList());
-        when(vectorRetrievalService.retrieve(question, 5))
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), any(RetrievalScope.class)))
                 .thenThrow(new GraphUnavailableException("Vector index query timeout"));
 
         assertThrows(GraphUnavailableException.class, () -> service.assembleEvidence(question));
+    }
+
+    @Test
+    void paymentServiceQuestionEnforcesArchitectureScopeAndRejectsUnrelatedRepo() {
+        String question = "Why did we choose PostgreSQL for the Payment Service?";
+        DecisionContext paymentCtx = new DecisionContext(
+                "Use PostgreSQL for payments",
+                "Payment Service",
+                "PostgreSQL",
+                "Payments",
+                "Payment Architecture Design",
+                "DOC-001",
+                List.of("(Decision: Use PostgreSQL for payments)-[AFFECTS]->(Project: Payment Service)")
+        );
+        when(contextQueryService.findForQuestion(question)).thenReturn(List.of(paymentCtx));
+        RetrievalScope archScope = RetrievalScope.architecture(Set.of("DOC-001"));
+        when(contextQueryService.determineScope(question)).thenReturn(archScope);
+
+        RetrievedChunk paymentChunk = new RetrievedChunk(
+                "DOC-001#chunk-0", 0, "PostgreSQL ACID compliance", "DOC-001", "Payment Architecture Design", 0.1, 0.9, Map.of()
+        );
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), eq(archScope))).thenReturn(List.of(paymentChunk));
+
+        EvidencePackage pkg = service.assembleEvidence(question, 5);
+
+        assertTrue(pkg.hasGraphContext());
+        assertTrue(pkg.hasDocumentEvidence());
+        assertEquals("DOC-001", pkg.retrievedPassages().get(0).sourceId());
+        // Verify vector retrieval was called with architecture scope (strictly authorizing DOC-001)
+        verify(vectorRetrievalService).retrieve(question, 5, archScope);
+    }
+
+    @Test
+    void repositorySpecificQuestionEnforcesRepositoryScope() {
+        String question = "What commits exist for AI-Insurance-Review?";
+        when(contextQueryService.findForQuestion(question)).thenReturn(Collections.emptyList());
+        RetrievalScope repoScope = RetrievalScope.repository("Rahulram240/AI-Insurance-Review");
+        when(contextQueryService.determineScope(question)).thenReturn(repoScope);
+
+        RetrievedChunk repoChunk = new RetrievedChunk(
+                "chunk-ai-1", 0, "Initial commit for insurance review", "Rahulram240/AI-Insurance-Review", "AI Insurance Review", 0.15, 0.85, Map.of()
+        );
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), eq(repoScope))).thenReturn(List.of(repoChunk));
+
+        EvidencePackage pkg = service.assembleEvidence(question, 5);
+
+        assertTrue(pkg.hasDocumentEvidence());
+        assertEquals(1, pkg.retrievedPassages().size());
+        assertEquals("Rahulram240/AI-Insurance-Review", pkg.retrievedPassages().get(0).sourceId());
+        verify(vectorRetrievalService).retrieve(question, 5, repoScope);
+    }
+
+    @Test
+    void unscopedQuestionProducesClearLimitationAndSkipsDocumentContamination() {
+        String question = "Tell me some random facts";
+        when(contextQueryService.findForQuestion(question)).thenReturn(Collections.emptyList());
+        RetrievalScope unscoped = RetrievalScope.unscoped();
+        when(contextQueryService.determineScope(question)).thenReturn(unscoped);
+        when(vectorRetrievalService.retrieve(eq(question), eq(5), eq(unscoped))).thenReturn(Collections.emptyList());
+
+        EvidencePackage pkg = service.assembleEvidence(question, 5);
+
+        assertFalse(pkg.hasDocumentEvidence());
+        assertTrue(pkg.limitations().stream().anyMatch(l -> l.contains("restricted to prevent evidence contamination")));
+        verify(vectorRetrievalService).retrieve(question, 5, unscoped);
     }
 }

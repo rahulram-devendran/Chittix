@@ -13,11 +13,17 @@ public class HealthService {
     }
 
     public HealthResponse check() {
-        boolean up = graphClient.ping();
+        boolean up = false;
+        try {
+            up = graphClient != null && graphClient.ping();
+        } catch (Exception e) {
+            up = false;
+        }
+        String graphName = graphClient != null ? graphClient.graphName() : "company_brain";
         return new HealthResponse(
                 "UP",
                 up ? "UP" : "DOWN",
-                graphClient.graphName(),
+                graphName,
                 up ? "FalkorDB reachable" : "FalkorDB not reachable or graph query failed");
     }
 }

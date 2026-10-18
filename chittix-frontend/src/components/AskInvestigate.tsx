@@ -8,7 +8,8 @@ interface AskInvestigateProps {
 }
 
 const SAMPLE_QUESTIONS = [
-  'Why did we choose PostgreSQL for the Payment Service?',
+  'What database is used for the payment service?',
+  'Why PostgreSQL for Payments?',
   'Who owns Payment Service?',
   'What is our vacation policy?',
 ];
@@ -40,7 +41,7 @@ export const AskInvestigate: React.FC<AskInvestigateProps> = ({
   providerStatus,
 }) => {
   const [question, setQuestion] = useState(
-    initialQuestion || 'Why did we choose PostgreSQL for the Payment Service?'
+    initialQuestion || 'What database is used for the payment service?'
   );
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AskResponse | null>(null);
@@ -157,15 +158,15 @@ export const AskInvestigate: React.FC<AskInvestigateProps> = ({
             </span>
             {isLlmGrounded ? (
               <span className="text-secondary flex items-center gap-1 font-medium">
-                • LLM Runtime: {providerStatus?.selectedProvider || 'ollama'} ({providerStatus?.configuredModel || 'qwen2.5:1.5b'})
+                • LLM Runtime: {response?.modelUsed || providerStatus?.configuredModel || 'Local Model'} {response?.providerUsed ? `(${response.providerUsed})` : ''}
               </span>
             ) : isDeterministicFallback ? (
               <span className="text-amber-500 flex items-center gap-1 font-medium">
-                • Fallback: Deterministic Cypher Graph Assembly
+                • Fallback: Deterministic Cypher Graph Assembly (No LLM)
               </span>
             ) : (
               <span className="text-outline hidden sm:inline">
-                • Active Model: {providerStatus?.configuredModel || 'Local LLM'}
+                • Active Model: {response?.modelUsed || providerStatus?.configuredModel || 'Local LLM'}
               </span>
             )}
           </div>
@@ -205,8 +206,9 @@ export const AskInvestigate: React.FC<AskInvestigateProps> = ({
           </div>
           <p className="font-body-md text-sm text-on-surface-variant">{error}</p>
           <p className="font-body-sm text-xs text-outline">
-            Verify that the Spring Boot backend (`mvnw.cmd spring-boot:run`) is active on port 8080 and reachable.
-          </p>
+  Check the error details above and retry the query. If the problem persists,
+  verify that the backend and FalkorDB are available.
+</p>
           <button
             onClick={() => handleAsk()}
             className="self-start mt-1 px-4 py-2 rounded-lg bg-surface-container-high hover:bg-surface-bright text-primary font-label-md text-xs font-semibold transition-colors border border-outline-variant/40 flex items-center gap-1.5 cursor-pointer"
@@ -238,12 +240,12 @@ export const AskInvestigate: React.FC<AskInvestigateProps> = ({
                 {isLlmGrounded ? (
                   <span className="font-code-sm text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container/25 text-secondary border border-secondary/30 font-semibold flex items-center gap-1">
                     <span className="material-symbols-outlined text-[13px]">psychology</span>
-                    LLM-Grounded ({providerStatus?.configuredModel || 'qwen2.5:1.5b'})
+                    LLM-Grounded ({response.modelUsed || providerStatus?.configuredModel || 'Local Model'})
                   </span>
                 ) : isDeterministicFallback ? (
                   <span className="font-code-sm text-[11px] px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/30 font-semibold flex items-center gap-1">
                     <span className="material-symbols-outlined text-[13px]">schema</span>
-                    Deterministic Fallback · No LLM
+                    Graph-Only Fallback · No LLM Used
                   </span>
                 ) : (
                   <span className="font-code-sm text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container/25 text-secondary border border-secondary/30 font-semibold">
@@ -253,14 +255,27 @@ export const AskInvestigate: React.FC<AskInvestigateProps> = ({
               </div>
             </div>
 
-            {/* Synthesized Answer Body */}
             <div className="space-y-2">
               <p className="font-body-md text-base text-primary font-medium leading-relaxed">
-                {response.answer}
+                {response.answer || 'No answer text was returned for this question.'}
               </p>
+
+              {isDeterministicFallback && response.fallbackReason && (
+                <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-400 font-code-sm flex items-start gap-2">
+                  <span className="material-symbols-outlined text-[15px] flex-shrink-0 mt-0.5">info</span>
+                  <span><strong>Graph Fallback Trigger:</strong> {response.fallbackReason}</span>
+                </div>
+              )}
+
+              {(!response.evidence || response.evidence.length === 0) &&
+                (!response.facts || response.facts.length === 0) && (
+                <p className="font-body-sm text-xs text-on-surface-variant">
+                  The backend returned no supporting facts or evidence documents for this response.
+                </p>
+              )}
               <p className="text-xs font-code-sm text-outline italic">
                 {isLlmGrounded
-                  ? 'Notice: Synthesized by local LLM grounded exclusively in verified FalkorDB facts and indexed documentation. Unstated claims and inferred approvals are omitted.'
+                  ? `Notice: Synthesized by ${response.modelUsed || 'LLM'} grounded exclusively in verified FalkorDB facts and indexed documentation. Unstated claims and inferred approvals are omitted.`
                   : isDeterministicFallback
                   ? 'Notice: Assembled deterministically from FalkorDB graph relationships. Generative LLM was unavailable or returned fallback.'
                   : 'Notice: Factual query against FalkorDB knowledge graph.'}
@@ -516,11 +531,31 @@ export const AskInvestigate: React.FC<AskInvestigateProps> = ({
 
               <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant/25 flex flex-col gap-2">
                 <p className="font-body-md text-sm text-on-surface leading-relaxed">
-                  {response.answer}
+                  {response.answer || 'No answer text was returned for this question.'}
                 </p>
+                {(response.facts?.length || 0) > 0 && (
+                  <div className="pt-2 space-y-1">
+                    {response.facts.map((fact, i) => (
+                      <p key={i} className="font-code-sm text-xs text-on-surface-variant break-words">
+                        {fact}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {(response.evidence?.length || 0) > 0 && (
+                  <div className="pt-2 space-y-1">
+                    {response.evidence.map((ev, i) => (
+                      <p key={i} className="font-code-sm text-xs text-secondary">
+                        {ev.documentTitle} · Source ID: {ev.sourceId}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <p className="font-body-sm text-xs text-outline">
-                  FalkorDB traversed the active graph cluster but found no matching Decision, Project, or System node connected to this query.
-                </p>
+  The available evidence does not establish the requested fact. Review the
+  retrieved evidence and source IDs above; related graph relationships do not
+  independently establish formal approval or an approval date.
+</p>
               </div>
 
               <div className="flex flex-col gap-2 pt-1">

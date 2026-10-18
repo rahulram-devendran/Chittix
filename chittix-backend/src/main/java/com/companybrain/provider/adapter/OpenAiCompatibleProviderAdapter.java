@@ -65,11 +65,16 @@ public class OpenAiCompatibleProviderAdapter implements ModelProviderAdapter {
 
     @Override
     public GeneratedAnswer generateAnswer(EvidencePackage evidence, LlmProperties properties) {
+        return generateAnswer(evidence, properties, getProvider());
+    }
+
+    public GeneratedAnswer generateAnswer(EvidencePackage evidence, LlmProperties properties, ModelProvider targetProvider) {
         EvidenceStatus status = EvidencePromptHelper.determineEvidenceStatus(evidence);
-        String baseUrl = properties.resolveBaseUrl(getProvider());
+        ModelProvider provider = targetProvider != null ? targetProvider : getProvider();
+        String baseUrl = properties.resolveBaseUrl(provider);
         String targetUrl = baseUrl.replaceAll("/+$", "") + "/chat/completions";
-        String apiKey = properties.resolveApiKey(getProvider());
-        String modelName = properties.resolveModel(getProvider());
+        String apiKey = properties.resolveApiKey(provider);
+        String modelName = properties.resolveModel(provider);
 
         try {
             String systemPrompt = EvidencePromptHelper.buildSystemPrompt();
@@ -147,7 +152,9 @@ public class OpenAiCompatibleProviderAdapter implements ModelProviderAdapter {
                     status,
                     evidence.limitations(),
                     false,
-                    null
+                    null,
+                    modelName,
+                    provider.getId()
             );
 
         } catch (HttpClientErrorException e) {
@@ -160,6 +167,53 @@ public class OpenAiCompatibleProviderAdapter implements ModelProviderAdapter {
             log.warn("OpenAI-compatible provider call failed ({}). Activating deterministic fallback.", e.getMessage());
             return EvidencePromptHelper.buildDeterministicFallback(evidence, status, "Provider runtime error: " + e.getMessage());
         }
+    }
+
+    public RestClient getCustomRestClient() {
+        return customRestClient;
+    }
+
+    @Override
+    public com.companybrain.dto.ProviderTestResult testConnection(LlmProperties properties) {
+        long start = System.currentTimeMillis();
+        String baseUrl = properties.resolveBaseUrl(getProvider());
+        String targetUrl = baseUrl.replaceAll("/+$", "") + "/models";
+        String apiKey = properties.resolveApiKey(getProvider());
+        String modelName = properties.resolveModel(getProvider());
+
+        try {
+            RestClient client = customRestClient != null ? customRestClient : buildShortTimeoutRestClient();
+
+            RestClient.RequestHeadersSpec<?> req = client.get()
+                    .uri(targetUrl)
+                    .accept(MediaType.APPLICATION_JSON);
+
+            if (apiKey != null && !apiKey.isBlank()) {
+                req.header("Authorization", "Bearer " + apiKey.trim());
+            }
+
+            req.retrieve().toBodilessEntity();
+
+            long latency = System.currentTimeMillis() - start;
+            return new com.companybrain.dto.ProviderTestResult(true, getProvider().getId(), modelName,
+                    "Successfully connected to OpenAI-compatible endpoint at " + baseUrl + ".", latency);
+        } catch (HttpClientErrorException.Unauthorized | HttpClientErrorException.Forbidden e) {
+            long latency = System.currentTimeMillis() - start;
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Authentication failed: Invalid or unauthorized API key.", latency);
+        } catch (Exception e) {
+            long latency = System.currentTimeMillis() - start;
+            String safeMsg = e.getMessage() != null ? e.getMessage() : "Connection failed";
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Failed to connect to endpoint at " + baseUrl + ": " + safeMsg, latency);
+        }
+    }
+
+    private static RestClient buildShortTimeoutRestClient() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(4000));
+        factory.setReadTimeout(Duration.ofMillis(5000));
+        return RestClient.builder().requestFactory(factory).build();
     }
 
     private static RestClient buildDefaultRestClient(LlmProperties properties) {

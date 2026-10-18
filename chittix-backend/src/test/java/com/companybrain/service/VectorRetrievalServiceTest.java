@@ -1,6 +1,7 @@
 package com.companybrain.service;
 
 import com.companybrain.config.VectorSchemaProperties;
+import com.companybrain.dto.RetrievalScope;
 import com.companybrain.dto.RetrievedChunk;
 import com.companybrain.exception.GraphUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -225,5 +227,81 @@ class VectorRetrievalServiceTest {
                 .thenThrow(new GraphUnavailableException("FalkorDB connection timeout"));
 
         assertThrows(GraphUnavailableException.class, () -> service.retrieve("Why PostgreSQL?"));
+    }
+
+    @Test
+    void filtersOutChunksFromUnrelatedRepositoryWhenScopeIsArchitecture() {
+        when(vectorSchemaService.isVectorIndexPresent("DocumentChunk", "embedding")).thenReturn(true);
+        when(vectorSchemaService.getExistingVectorIndexDimension("DocumentChunk", "embedding")).thenReturn(384);
+        when(embeddingService.embed("Why did we choose PostgreSQL for the Payment Service?")).thenReturn(DUMMY_VECTOR);
+
+        Map<String, Object> unrelatedRepoChunk = Map.of(
+                "chunkId", "repo-chunk-1",
+                "chunkIndex", 0,
+                "content", "AI Insurance Review commit description",
+                "sourceId", "https://github.com/Rahulram240/AI-Insurance-Review/commit/abc",
+                "documentTitle", "AI Insurance Review",
+                "score", 0.05
+        );
+        Map<String, Object> authorizedDocChunk = Map.of(
+                "chunkId", "DOC-001#chunk-0",
+                "chunkIndex", 0,
+                "content", "PostgreSQL chosen for Payment Service",
+                "sourceId", "DOC-001",
+                "documentTitle", "Payment Architecture Design",
+                "score", 0.12
+        );
+
+        when(graphClient.query(anyString(), anyMap())).thenReturn(List.of(unrelatedRepoChunk, authorizedDocChunk));
+
+        RetrievalScope archScope = RetrievalScope.architecture(Set.of("DOC-001"));
+        List<RetrievedChunk> results = service.retrieve("Why did we choose PostgreSQL for the Payment Service?", 5, archScope);
+
+        // Crucial verification: unrelated repo chunk is filtered out, DOC-001 is preserved
+        assertEquals(1, results.size());
+        assertEquals("DOC-001#chunk-0", results.get(0).chunkId());
+        assertEquals("DOC-001", results.get(0).sourceId());
+    }
+
+    @Test
+    void allowsChunksForTargetRepositoryWhenScopeIsRepository() {
+        when(vectorSchemaService.isVectorIndexPresent("DocumentChunk", "embedding")).thenReturn(true);
+        when(vectorSchemaService.getExistingVectorIndexDimension("DocumentChunk", "embedding")).thenReturn(384);
+        when(embeddingService.embed("What is AI Insurance Review?")).thenReturn(DUMMY_VECTOR);
+
+        Map<String, Object> targetRepoChunk = Map.of(
+                "chunkId", "ai-chunk-1",
+                "chunkIndex", 0,
+                "content", "AI Insurance Review model training",
+                "sourceId", "https://github.com/Rahulram240/AI-Insurance-Review/commit/abc",
+                "documentTitle", "AI Insurance Review",
+                "score", 0.08
+        );
+        Map<String, Object> otherRepoChunk = Map.of(
+                "chunkId", "other-chunk-1",
+                "chunkIndex", 0,
+                "content", "Problems solved using java",
+                "sourceId", "https://github.com/Rahulram240/PROBLEMS-SOLVED-USING-JAVA/commit/xyz",
+                "documentTitle", "PROBLEMS-SOLVED-USING-JAVA",
+                "score", 0.10
+        );
+
+        when(graphClient.query(anyString(), anyMap())).thenReturn(List.of(targetRepoChunk, otherRepoChunk));
+
+        RetrievalScope repoScope = RetrievalScope.repository("Rahulram240/AI-Insurance-Review");
+        List<RetrievedChunk> results = service.retrieve("What is AI Insurance Review?", 5, repoScope);
+
+        assertEquals(1, results.size());
+        assertEquals("ai-chunk-1", results.get(0).chunkId());
+    }
+
+    @Test
+    void returnsEmptyListImmediatelyWhenScopeIsUnscoped() {
+        RetrievalScope unscoped = RetrievalScope.unscoped();
+        List<RetrievedChunk> results = service.retrieve("Some general question", 5, unscoped);
+
+        assertTrue(results.isEmpty());
+        verify(embeddingService, never()).embed(anyString());
+        verify(graphClient, never()).query(anyString(), anyMap());
     }
 }

@@ -26,8 +26,25 @@ public record GeneratedAnswer(
         EvidenceStatus evidenceStatus,
         List<String> limitations,
         boolean fallbackUsed,
-        String fallbackReason
+        String fallbackReason,
+        String modelUsed,
+        String providerUsed
 ) {
+    public GeneratedAnswer(
+            String question,
+            String answerText,
+            String answerType,
+            List<String> graphFacts,
+            List<RetrievedPassage> citedPassages,
+            List<Evidence> distinctSources,
+            EvidenceStatus evidenceStatus,
+            List<String> limitations,
+            boolean fallbackUsed,
+            String fallbackReason
+    ) {
+        this(question, answerText, answerType, graphFacts, citedPassages, distinctSources, evidenceStatus, limitations, fallbackUsed, fallbackReason, null, null);
+    }
+
     public GeneratedAnswer {
         if (graphFacts == null) graphFacts = List.of();
         if (citedPassages == null) citedPassages = List.of();

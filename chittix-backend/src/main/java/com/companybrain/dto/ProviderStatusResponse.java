@@ -21,6 +21,9 @@ public record ProviderStatusResponse(
             String provider,
             boolean implemented,
             boolean configured,
+            String model,
+            String baseUrl,
+            boolean apiKeyConfigured,
             Set<String> supportedCapabilities
     ) {}
 }

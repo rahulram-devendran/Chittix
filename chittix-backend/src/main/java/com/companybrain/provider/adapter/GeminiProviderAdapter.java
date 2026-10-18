@@ -168,7 +168,9 @@ public class GeminiProviderAdapter implements ModelProviderAdapter {
                     status,
                     evidence.limitations(),
                     false,
-                    null
+                    null,
+                    modelName,
+                    getProvider().getId()
             );
 
         } catch (HttpClientErrorException e) {
@@ -181,6 +183,59 @@ public class GeminiProviderAdapter implements ModelProviderAdapter {
             log.warn("Gemini provider call failed ({}). Activating deterministic fallback.", e.getMessage());
             return EvidencePromptHelper.buildDeterministicFallback(evidence, status, "Gemini runtime error: " + e.getMessage());
         }
+    }
+
+    @Override
+    public com.companybrain.dto.ProviderTestResult testConnection(LlmProperties properties) {
+        String apiKey = properties.resolveApiKey(ModelProvider.GEMINI);
+        String modelName = properties.resolveModel(ModelProvider.GEMINI);
+        String baseUrl = properties.resolveBaseUrl(ModelProvider.GEMINI).replaceAll("/+$", "");
+
+        if (apiKey == null || apiKey.isBlank()) {
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Google Gemini requires an API key. Please provide a valid Gemini API key.", 0L);
+        }
+
+        long start = System.currentTimeMillis();
+        String targetUrl = baseUrl + "/v1beta/models";
+
+        try {
+            RestClient client = customRestClient != null ? customRestClient : buildShortTimeoutRestClient();
+
+            client.get()
+                    .uri(targetUrl)
+                    .header("x-goog-api-key", apiKey.trim())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            long latency = System.currentTimeMillis() - start;
+            return new com.companybrain.dto.ProviderTestResult(true, getProvider().getId(), modelName,
+                    "Successfully connected to Google Gemini API. Validated credentials.", latency);
+        } catch (HttpClientErrorException e) {
+            long latency = System.currentTimeMillis() - start;
+            int code = e.getStatusCode().value();
+            if (code == 400 || code == 401 || code == 403) {
+                return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                        "Gemini authentication failed: Invalid API key or permission denied.", latency);
+            } else if (code == 429) {
+                return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                        "Gemini quota or rate limit exceeded.", latency);
+            }
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Gemini API returned HTTP " + code, latency);
+        } catch (Exception e) {
+            long latency = System.currentTimeMillis() - start;
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Could not reach Google Gemini API: " + e.getMessage(), latency);
+        }
+    }
+
+    private static RestClient buildShortTimeoutRestClient() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(4000));
+        factory.setReadTimeout(Duration.ofMillis(5000));
+        return RestClient.builder().requestFactory(factory).build();
     }
 
     private static RestClient buildDefaultRestClient(LlmProperties properties) {

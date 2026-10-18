@@ -135,7 +135,7 @@ class BrainServiceTest {
     }
 
     @Test
-    void returnsProviderStatusWithoutExposingSensitiveKeys() {
+    void returnsProviderStatusWithoutExposingSensitiveKeys() throws Exception {
         com.companybrain.config.LlmProperties properties = new com.companybrain.config.LlmProperties();
         properties.setProvider("ollama");
         properties.setModel("qwen2.5:1.5b");
@@ -155,5 +155,60 @@ class BrainServiceTest {
         assertTrue(status.implemented());
         assertTrue(status.configured());
         assertFalse(status.availableProviders().isEmpty());
+        String serialized = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(status);
+        assertFalse(serialized.contains("sk-secret-do-not-reveal"));
+        com.companybrain.dto.ProviderStatusResponse.ProviderInfo ollamaInfo = status.availableProviders().stream()
+                .filter(info -> "ollama".equals(info.provider()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("qwen2.5:1.5b", ollamaInfo.model());
+        assertEquals("http://localhost:11434", ollamaInfo.baseUrl());
+        assertFalse(ollamaInfo.apiKeyConfigured());
+    }
+
+    @Test
+    void rejectsRemoteAdminAccessWithForbidden() {
+        com.companybrain.config.LlmProperties properties = new com.companybrain.config.LlmProperties();
+        com.companybrain.provider.ModelProviderRegistry registry = new com.companybrain.provider.ModelProviderRegistry(List.of(
+                new com.companybrain.provider.adapter.OllamaProviderAdapter()
+        ));
+        BrainService brainService = new BrainService(evidenceAssemblyService, answerGenerationService, properties, registry);
+
+        org.springframework.mock.web.MockHttpServletRequest remoteReq = new org.springframework.mock.web.MockHttpServletRequest();
+        remoteReq.setRemoteAddr("198.51.100.12"); // Remote IP
+
+        com.companybrain.dto.ProviderConfigRequest config = new com.companybrain.dto.ProviderConfigRequest("ollama", "qwen2.5:1.5b", "http://localhost:11434", null);
+
+        org.springframework.web.server.ResponseStatusException ex = assertThrows(
+                org.springframework.web.server.ResponseStatusException.class,
+                () -> brainService.testProvider(config, remoteReq)
+        );
+        assertEquals(org.springframework.http.HttpStatus.FORBIDDEN, ex.getStatusCode());
+    }
+
+    @Test
+    void configureProviderDoesNotReplaceActiveConfigWhenTestFails() {
+        com.companybrain.config.LlmProperties properties = new com.companybrain.config.LlmProperties();
+        properties.setProvider("ollama");
+        properties.setModel("qwen2.5:1.5b");
+
+        // OpenAi adapter without key will fail connection test
+        com.companybrain.provider.ModelProviderRegistry registry = new com.companybrain.provider.ModelProviderRegistry(List.of(
+                new com.companybrain.provider.adapter.OllamaProviderAdapter(),
+                new com.companybrain.provider.adapter.OpenAiProviderAdapter()
+        ));
+        BrainService brainService = new BrainService(evidenceAssemblyService, answerGenerationService, properties, registry);
+
+        org.springframework.mock.web.MockHttpServletRequest localReq = new org.springframework.mock.web.MockHttpServletRequest();
+        localReq.setRemoteAddr("127.0.0.1");
+
+        // Submit failing candidate (openai with no apiKey)
+        com.companybrain.dto.ProviderConfigRequest badCandidate = new com.companybrain.dto.ProviderConfigRequest("openai", "gpt-4o-mini", null, "");
+
+        assertThrows(IllegalArgumentException.class, () -> brainService.configureProvider(badCandidate, localReq));
+
+        // Verify active configuration was NOT replaced
+        assertEquals("ollama", properties.getProvider());
+        assertEquals("qwen2.5:1.5b", properties.getModel());
     }
 }

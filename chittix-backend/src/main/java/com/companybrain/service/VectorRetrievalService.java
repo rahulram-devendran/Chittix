@@ -1,6 +1,7 @@
 package com.companybrain.service;
 
 import com.companybrain.config.VectorSchemaProperties;
+import com.companybrain.dto.RetrievalScope;
 import com.companybrain.dto.RetrievedChunk;
 import com.companybrain.exception.GraphUnavailableException;
 import org.slf4j.Logger;
@@ -17,7 +18,8 @@ import java.util.Set;
 
 /**
  * Service for semantic vector retrieval of document chunks from FalkorDB.
- * Uses native vector search (CALL db.idx.vector.queryNodes) with local 384-dimensional embeddings.
+ * Uses native vector search (CALL db.idx.vector.queryNodes) with local
+ * 384-dimensional embeddings and optional authorized scope filtering.
  */
 @Service
 public class VectorRetrievalService {
@@ -33,10 +35,10 @@ public class VectorRetrievalService {
     private final Double configuredMaxDistance;
 
     public VectorRetrievalService(GraphClient graphClient,
-                                  VectorSchemaService vectorSchemaService,
-                                  EmbeddingService embeddingService,
-                                  VectorSchemaProperties properties,
-                                  @Value("${falkordb.vector.max-distance:#{null}}") Double configuredMaxDistance) {
+            VectorSchemaService vectorSchemaService,
+            EmbeddingService embeddingService,
+            VectorSchemaProperties properties,
+            @Value("${falkordb.vector.max-distance:#{null}}") Double configuredMaxDistance) {
         this.graphClient = graphClient;
         this.vectorSchemaService = vectorSchemaService;
         this.embeddingService = embeddingService;
@@ -45,29 +47,51 @@ public class VectorRetrievalService {
     }
 
     /**
-     * Retrieves the top DEFAULT_TOP_K (5) most relevant document chunks for a question.
+     * Retrieves the top DEFAULT_TOP_K (5) most relevant document chunks for a
+     * question.
      */
     public List<RetrievedChunk> retrieve(String question) {
-        return retrieve(question, DEFAULT_TOP_K, configuredMaxDistance);
+        return retrieve(question, DEFAULT_TOP_K, configuredMaxDistance, null);
     }
 
     /**
      * Retrieves the top K most relevant document chunks for a question.
      */
     public List<RetrievedChunk> retrieve(String question, int topK) {
-        return retrieve(question, topK, configuredMaxDistance);
+        return retrieve(question, topK, configuredMaxDistance, null);
     }
 
     /**
-     * Retrieves the top K most relevant document chunks for a question with optional max distance filter.
-     * Note: In FalkorDB with cosine similarityFunction, score represents cosine distance (0.0 is identical match).
-     *
-     * @param question    query text (must not be blank)
-     * @param topK        maximum number of chunks to retrieve (must be between 1 and 100)
-     * @param maxDistance optional maximum allowable distance score (null for no cutoff)
-     * @return ordered list of RetrievedChunk in ascending order of distance (highest similarity first)
+     * Retrieves the top K most relevant document chunks for a question with an explicit retrieval scope.
+     */
+    public List<RetrievedChunk> retrieve(String question, int topK, RetrievalScope scope) {
+        return retrieve(question, topK, configuredMaxDistance, scope);
+    }
+
+    /**
+     * Retrieves the top K most relevant document chunks for a question with
+     * optional max distance filter.
      */
     public List<RetrievedChunk> retrieve(String question, int topK, Double maxDistance) {
+        return retrieve(question, topK, maxDistance, null);
+    }
+
+    /**
+     * Retrieves the top K most relevant document chunks for a question with
+     * optional max distance filter and authorized scope enforcement.
+     * Note: In FalkorDB with cosine similarityFunction, score represents cosine
+     * distance (0.0 is identical match).
+     *
+     * @param question    query text (must not be blank)
+     * @param topK        maximum number of chunks to retrieve (must be between 1
+     *                    and 100)
+     * @param maxDistance optional maximum allowable distance score (null for no
+     *                    cutoff)
+     * @param scope       optional authorized retrieval scope; when null, retrieval is unscoped
+     * @return ordered list of RetrievedChunk in ascending order of distance
+     *         (highest similarity first)
+     */
+    public List<RetrievedChunk> retrieve(String question, int topK, Double maxDistance, RetrievalScope scope) {
         if (question == null || question.isBlank()) {
             throw new IllegalArgumentException("Question must not be blank");
         }
@@ -79,6 +103,12 @@ public class VectorRetrievalService {
         }
         if (maxDistance != null && (maxDistance < 0.0 || maxDistance > 2.0)) {
             throw new IllegalArgumentException("maxDistance must be between 0.0 and 2.0, got: " + maxDistance);
+        }
+
+        // If an explicit unscoped boundary is provided, do not perform unconstrained retrieval
+        if (scope != null && scope.type() == RetrievalScope.ScopeType.UNSCOPED) {
+            log.info("Retrieval scope is UNSCOPED for question '{}'. Skipping unconstrained vector retrieval.", question);
+            return Collections.emptyList();
         }
 
         String label = properties.getIndexLabel();
@@ -96,13 +126,17 @@ public class VectorRetrievalService {
         int expectedDim = embeddingService.getDimension();
         if (existingDim != null && existingDim != expectedDim) {
             throw new IllegalStateException("Vector index dimension mismatch on :" + label + "(" + prop + "): "
-                    + "existing index has dimension " + existingDim + ", but embedding service produces " + expectedDim);
+                    + "existing index has dimension " + existingDim + ", but embedding service produces "
+                    + expectedDim);
         }
 
         // 3. Generate query embedding vector
         List<Float> queryVector = embeddingService.embed(question);
 
-        // 4. Execute native vector query via GraphClient
+        // 4. Candidate pool size (fetch more candidates when filtering by scope to avoid starving topK)
+        int queryK = (scope != null) ? Math.min(Math.max(topK * 4, 25), MAX_ALLOWED_TOP_K) : topK;
+
+        // 5. Execute native vector query via GraphClient
         // Cypher parameterized query linking DocumentChunk to its Document node
         String cypher = "CALL db.idx.vector.queryNodes($label, $property, $k, vecf32($queryVector)) YIELD node, score "
                 + "MATCH (doc:Document)-[:HAS_CHUNK]->(node) "
@@ -117,9 +151,8 @@ public class VectorRetrievalService {
         Map<String, Object> params = Map.of(
                 "label", label,
                 "property", prop,
-                "k", topK,
-                "queryVector", queryVector
-        );
+                "k", queryK,
+                "queryVector", queryVector);
 
         List<Map<String, Object>> rows;
         try {
@@ -150,16 +183,27 @@ public class VectorRetrievalService {
             double score = doubleVal(row, "score");
             double similarity = 1.0 - score;
 
-            if (maxDistance != null && score > maxDistance) {
-                // Result exceeds maximum allowable distance score cutoff
+            boolean distanceFiltered = maxDistance != null && score > maxDistance;
+            if (distanceFiltered) {
                 continue;
             }
+
+            // Scope boundary check: reject chunks from unauthorized sources/repositories
+            if (scope != null && !scope.isAllowed(sourceId)) {
+                log.debug(
+                        "Vector retrieval: skipping chunk '{}' with sourceId '{}' as it is outside authorized scope '{}'",
+                        chunkId, sourceId, scope.scopeDescription());
+                continue;
+            }
+
+            log.info(
+                    "Vector retrieval accepted: title='{}', sourceId='{}', distance={}",
+                    documentTitle, sourceId, score);
 
             Map<String, Object> metadata = Map.of(
                     "distance", score,
                     "similarity", similarity,
-                    "chunkIndex", chunkIndex
-            );
+                    "chunkIndex", chunkIndex);
 
             results.add(new RetrievedChunk(
                     chunkId,
@@ -169,8 +213,11 @@ public class VectorRetrievalService {
                     documentTitle != null ? documentTitle : "",
                     score,
                     similarity,
-                    metadata
-            ));
+                    metadata));
+
+            if (results.size() >= topK) {
+                break;
+            }
         }
 
         return results;

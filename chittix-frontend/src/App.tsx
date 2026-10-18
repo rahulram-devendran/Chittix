@@ -7,6 +7,8 @@ import { CompanyPulse } from './components/CompanyPulse';
 import { KnowledgeMap } from './components/KnowledgeMap';
 import { ConsequenceExplorer } from './components/ConsequenceExplorer';
 import { AskInvestigate } from './components/AskInvestigate';
+import { SourceIntegration } from './components/SourceIntegration';
+import { AdminIntegrations } from './components/AdminIntegrations';
 import {
   checkHealth,
   getPaymentsContext,
@@ -92,6 +94,12 @@ export const AppContent: React.FC = () => {
     refreshHealth();
     refreshContext();
     refreshProviderStatus();
+
+    const interval = setInterval(() => {
+      refreshHealth();
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, [refreshHealth, refreshContext, refreshProviderStatus]);
 
   const handleNavigateToAsk = (query?: string) => {
@@ -141,25 +149,16 @@ export const AppContent: React.FC = () => {
               providerStatusLoading={providerStatusLoading}
               onRefreshData={refreshAllData}
               onNavigateToAsk={handleNavigateToAsk}
+              onNavigateToScreen={setActiveScreen}
             />
           )}
 
           {activeScreen === 'map' && (
-            <KnowledgeMap
-              paymentsContext={paymentsContext}
-              loading={loadingContext}
-              onRefresh={refreshContext}
-              onNavigateToAsk={handleNavigateToAsk}
-            />
+            <KnowledgeMap onNavigateToAsk={handleNavigateToAsk} />
           )}
 
           {activeScreen === 'consequence' && (
-            <ConsequenceExplorer
-              paymentsContext={paymentsContext}
-              loading={loadingContext}
-              onRefresh={refreshContext}
-              onNavigateToAsk={handleNavigateToAsk}
-            />
+            <ConsequenceExplorer onNavigateToAsk={handleNavigateToAsk} />
           )}
 
           {activeScreen === 'ask' && (
@@ -168,7 +167,27 @@ export const AppContent: React.FC = () => {
               providerStatus={providerStatus}
             />
           )}
+
+          {activeScreen === 'sources' && (
+            <SourceIntegration
+              onNavigateToAsk={handleNavigateToAsk}
+            />
+          )}
+
+          {activeScreen === 'integrations' && (
+            <AdminIntegrations
+              health={health}
+              healthLoading={healthLoading}
+              onRefreshHealth={refreshHealth}
+              providerStatus={providerStatus}
+              providerStatusLoading={providerStatusLoading}
+              onRefreshProviderStatus={refreshProviderStatus}
+              onNavigateToScreen={setActiveScreen}
+              onNavigateToAsk={handleNavigateToAsk}
+            />
+          )}
         </main>
+
       </div>
 
       {/* Shared Mobile Bottom Navigation */}

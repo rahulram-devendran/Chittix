@@ -4,6 +4,8 @@ import com.companybrain.config.LlmProperties;
 import com.companybrain.dto.EvidencePackage;
 import com.companybrain.dto.GeneratedAnswer;
 
+import com.companybrain.dto.ProviderTestResult;
+
 import java.util.Set;
 
 /**
@@ -43,4 +45,16 @@ public interface ModelProviderAdapter {
      * @return grounded GeneratedAnswer or deterministic fallback
      */
     GeneratedAnswer generateAnswer(EvidencePackage evidence, LlmProperties properties);
+
+    /**
+     * Tests connectivity to the provider endpoint with the given candidate properties.
+     * Validates credentials and endpoint reachability without mutating active configuration.
+     *
+     * @param properties candidate properties to test
+     * @return ProviderTestResult with status, latency, and safe message
+     */
+    default ProviderTestResult testConnection(LlmProperties properties) {
+        return new ProviderTestResult(false, getProvider().getId(), properties.resolveModel(getProvider()),
+                "Connection testing is not supported for provider: " + getProvider().getId(), null);
+    }
 }

@@ -178,6 +178,60 @@ public class AnthropicProviderAdapter implements ModelProviderAdapter {
         }
     }
 
+    @Override
+    public com.companybrain.dto.ProviderTestResult testConnection(LlmProperties properties) {
+        String apiKey = properties.resolveApiKey(ModelProvider.ANTHROPIC);
+        String modelName = properties.resolveModel(ModelProvider.ANTHROPIC);
+        String baseUrl = properties.resolveBaseUrl(ModelProvider.ANTHROPIC).replaceAll("/+$", "");
+
+        if (apiKey == null || apiKey.isBlank()) {
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Anthropic requires an API key. Please provide a valid Anthropic API key.", 0L);
+        }
+
+        long start = System.currentTimeMillis();
+        String targetUrl = baseUrl + "/v1/models";
+
+        try {
+            RestClient client = customRestClient != null ? customRestClient : buildShortTimeoutRestClient();
+
+            client.get()
+                    .uri(targetUrl)
+                    .header("x-api-key", apiKey.trim())
+                    .header("anthropic-version", "2023-06-01")
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            long latency = System.currentTimeMillis() - start;
+            return new com.companybrain.dto.ProviderTestResult(true, getProvider().getId(), modelName,
+                    "Successfully connected to Anthropic API. Validated credentials.", latency);
+        } catch (HttpClientErrorException e) {
+            long latency = System.currentTimeMillis() - start;
+            int code = e.getStatusCode().value();
+            if (code == 401) {
+                return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                        "Anthropic authentication failed: Invalid API key.", latency);
+            } else if (code == 429) {
+                return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                        "Anthropic rate limit exceeded.", latency);
+            }
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Anthropic API returned HTTP " + code, latency);
+        } catch (Exception e) {
+            long latency = System.currentTimeMillis() - start;
+            return new com.companybrain.dto.ProviderTestResult(false, getProvider().getId(), modelName,
+                    "Could not reach Anthropic API: " + e.getMessage(), latency);
+        }
+    }
+
+    private static RestClient buildShortTimeoutRestClient() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(4000));
+        factory.setReadTimeout(Duration.ofMillis(5000));
+        return RestClient.builder().requestFactory(factory).build();
+    }
+
     private static RestClient buildDefaultRestClient(LlmProperties properties) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         int timeoutMillis = Math.max(1, properties.getTimeoutSeconds()) * 1000;

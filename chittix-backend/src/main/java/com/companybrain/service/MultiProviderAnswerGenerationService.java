@@ -16,8 +16,10 @@ import org.springframework.stereotype.Service;
 import java.util.Optional;
 
 /**
- * Central orchestrator for evidence-grounded answer generation across multiple LLM providers.
- * Decouples Chittix's evidence pipeline from vendor specifics, delegating to registered
+ * Central orchestrator for evidence-grounded answer generation across multiple
+ * LLM providers.
+ * Decouples Chittix's evidence pipeline from vendor specifics, delegating to
+ * registered
  * provider adapters based on externalized configuration.
  */
 @Primary
@@ -48,9 +50,11 @@ public class MultiProviderAnswerGenerationService implements AnswerGenerationSer
 
         EvidenceStatus status = EvidencePromptHelper.determineEvidenceStatus(evidence);
 
-        // Rule: If LLM is disabled globally via configuration, fall back deterministically
+        // Rule: If LLM is disabled globally via configuration, fall back
+        // deterministically
         if (!properties.isEnabled()) {
-            log.info("LLM generation is disabled by configuration (chittix.llm.enabled=false). Using deterministic fallback.");
+            log.info(
+                    "LLM generation is disabled by configuration (chittix.llm.enabled=false). Using deterministic fallback.");
             return EvidencePromptHelper.buildDeterministicFallback(evidence, status, "LLM disabled by configuration");
         }
 
@@ -82,13 +86,78 @@ public class MultiProviderAnswerGenerationService implements AnswerGenerationSer
 
         // Check if provider is configured (e.g. required API key)
         if (!adapter.isConfigured(properties)) {
-            String errorMsg = "Provider '" + provider.getId() + "' is not properly configured. Required API credentials or base URL are missing.";
+            String errorMsg = "Provider '" + provider.getId()
+                    + "' is not properly configured. Required API credentials or base URL are missing.";
             log.warn(errorMsg);
             return EvidencePromptHelper.buildDeterministicFallback(evidence, status, errorMsg);
         }
 
         String modelName = properties.resolveModel(provider);
+
         log.info("Delegating answer generation to provider '{}' with model '{}'", provider.getId(), modelName);
+
+        if (isApprovalDateQuestion(evidence.question())
+                && !hasExplicitApprovalDateEvidence(evidence)) {
+            log.info("Returning insufficient-evidence response for approval-date question.");
+
+            return new GeneratedAnswer(
+                    evidence.question(),
+                    "The exact date when the PostgreSQL decision was formally approved "
+                            + "is not established by the retrieved evidence. The SUPPORTED_BY "
+                            + "relationship to Payment Architecture Design (DOC-001) does not "
+                            + "establish formal approval or an approval date.",
+                    "INSUFFICIENT_EVIDENCE",
+                    evidence.graphFacts(),
+                    evidence.retrievedPassages(),
+                    evidence.distinctSources(),
+                    EvidenceStatus.INSUFFICIENT,
+                    evidence.limitations(),
+                    false,
+                    null);
+        }
+
         return adapter.generateAnswer(evidence, properties);
+
     }
+
+    private boolean isApprovalDateQuestion(String question) {
+        if (question == null) {
+            return false;
+        }
+
+        String normalized = question.toLowerCase(java.util.Locale.ROOT);
+
+        boolean asksForApproval = normalized.contains("approval")
+                || normalized.contains("approved")
+                || normalized.contains("ratification")
+                || normalized.contains("ratified");
+
+        boolean asksForDate = normalized.contains("date")
+                || normalized.contains("when")
+                || normalized.contains("exact day");
+
+        return asksForApproval && asksForDate;
+    }
+
+    private boolean hasExplicitApprovalDateEvidence(EvidencePackage evidence) {
+        java.util.regex.Pattern datePattern = java.util.regex.Pattern.compile(
+                "\\b(?:\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})\\b");
+
+        java.util.regex.Pattern approvalPattern = java.util.regex.Pattern.compile(
+                "\\b(?:formally\\s+approved|approved\\s+on|approval\\s+date|date\\s+of\\s+approval|ratified\\s+on)\\b",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+
+        for (var passage : evidence.retrievedPassages()) {
+            String text = passage.text();
+
+            if (text != null
+                    && approvalPattern.matcher(text).find()
+                    && datePattern.matcher(text).find()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 }

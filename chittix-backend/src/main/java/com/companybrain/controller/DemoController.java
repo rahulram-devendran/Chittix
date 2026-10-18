@@ -32,4 +32,9 @@ public class DemoController {
         }
         return new PaymentsContextResponse(graphClient.graphName(), contexts.size(), contexts);
     }
+
+    @GetMapping("/graph")
+    public com.companybrain.dto.GraphDataResponse graph() {
+        return contextQueryService.getKnowledgeGraph();
+    }
 }
